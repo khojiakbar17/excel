@@ -15,6 +15,7 @@ class Sheet {
   List<_Span?> _spanList = [];
   Map<int, Map<int, Data>> _sheetData = {};
   HeaderFooter? _headerFooter;
+  Drawing? _drawing;
 
   ///
   /// It will clone the object by changing the `this` reference of previous oldSheetObject and putting `new this` reference, with copying the values too
@@ -1478,5 +1479,55 @@ class Sheet {
 
   set headerFooter(HeaderFooter? headerFooter) {
     _headerFooter = headerFooter;
+  }
+
+  /// Adds a chart to the sheet, automatically handling the drawing creation.
+  void addChart(
+    Chart chart,
+    String chartName, {
+    int x = 3,
+    int y = 2,
+    double width = 50,
+    double height = 30,
+  }) {
+    if (_drawing == null) {
+      _drawing = Drawing._(_excel, "drawing_${_sheet}");
+    }
+    chart._setSheet(this);
+    ChartElement chartElement = ChartElement(
+      id: "chart${_drawing!.allElements.length + 1}",
+      name: chartName,
+      x: x,
+      y: y,
+      width: width,
+      height: height,
+      chart: chart,
+    );
+    _drawing!.addElement(chartElement);
+  }
+
+  /// Removes the chart by its name.
+  void removeChart(String chartName) {
+    if (_drawing == null) return;
+
+    _drawing!.allElements.removeWhere((element) {
+      if (element is ChartElement && element.name == chartName) {
+        return true;
+      }
+      return false;
+    });
+
+    if (_drawing!.allElements.isEmpty) {
+      _drawing = null; // Remove drawing if empty
+    }
+  }
+
+  /// Retrieves all charts in the sheet.
+  List<Chart> get allCharts {
+    if (_drawing == null) return [];
+    return _drawing!.allElements
+        .whereType<ChartElement>()
+        .map((chartElement) => chartElement.chart)
+        .toList();
   }
 }

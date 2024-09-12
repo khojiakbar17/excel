@@ -28,6 +28,7 @@ part 'src/utilities/constants.dart';
 part 'src/utilities/enum.dart';
 part 'src/utilities/archive.dart';
 part 'src/utilities/colors.dart';
+part 'src/utilities/chart_constants.dart';
 
 /// Save
 part 'src/save/save_file.dart';
@@ -43,3 +44,10 @@ part 'src/sheet/cell_style.dart';
 part 'src/sheet/font_style.dart';
 part 'src/sheet/header_footer.dart';
 part 'src/sheet/border_style.dart';
+
+/// Drawing
+part 'src/drawings/drawing.dart';
+
+/// Chart
+part 'src/charts/chart.dart';
+part 'src/charts/range.dart';

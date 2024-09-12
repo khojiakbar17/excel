@@ -230,3 +230,28 @@ int getColumnIndex(String columnAlphabet) {
 int _fontStyleIndex(List<_FontStyle> list, _FontStyle fontStyle) {
   return list.indexOf(fontStyle);
 }
+
+///
+///Gets path of the file without xl folder
+///
+String _getFilePathWithoutXl(String path) {
+  if (!path.startsWith('xl/')) {
+    return path;
+  }
+
+  return path.substring(3);
+}
+
+void _addXmlStringToBuilder(XmlBuilder builder, String xmlString) {
+  // Parse the string into an XML document
+  final parsedXml = XmlDocumentFragment.parse(xmlString);
+
+  // Traverse through each element in the parsed XML and add it to the builder
+  for (var node in parsedXml.children) {
+    if (node is XmlElement) {
+      print(node.toXmlString(pretty: false));
+      builder.xml(node.toXmlString(pretty: false));
+    }
+  }
+}
+

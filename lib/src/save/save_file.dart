@@ -6,6 +6,9 @@ class Save {
   final List<CellStyle> _innerCellStyle = [];
   final Parser parser;
 
+  var _drawingsCount = 0;
+  var _chartsCount = 0;
+
   Save._(this._excel, this.parser);
 
   void _addNewColumn(XmlElement columns, int min, int max, double width) {
@@ -559,6 +562,10 @@ class Save {
     for (var xmlFile in _excel._xmlFiles.keys) {
       var xml = _excel._xmlFiles[xmlFile].toString();
       var content = utf8.encode(xml);
+
+      print('Saving $xmlFile');
+      print(content);
+      print('');
       _archiveFiles[xmlFile] = ArchiveFile(xmlFile, content.length, content);
     }
     return ZipEncoder().encode(_cloneArchive(_excel._archive, _archiveFiles));
@@ -903,29 +910,22 @@ class Save {
   }
 
   /// Writing cell contained text into the excel sheet files.
+  /// Main method to save all sheet elements, including charts and drawings.
   void _setSheetElements() {
     _excel._sharedStrings.clear();
 
     _excel._sheetMap.forEach((sheetName, sheetObject) {
-      ///
-      /// Create the sheet's xml file if it does not exist.
       if (_excel._sheets[sheetName] == null) {
         parser._createSheet(sheetName);
       }
 
-      /// Clear the previous contents of the sheet if it exists,
-      /// in order to reduce the time to find and compare with the sheet rows
-      /// and hence just do the work of putting the data only i.e. creating new rows
       if (_excel._sheets[sheetName]?.children.isNotEmpty ?? false) {
         _excel._sheets[sheetName]!.children.clear();
       }
 
-      /// `Above function is important in order to wipe out the old contents of the sheet.`
-
       XmlDocument? xmlFile = _excel._xmlFiles[_excel._xmlSheetId[sheetName]];
       if (xmlFile == null) return;
 
-      // Set default column width and height for the sheet.
       double? defaultRowHeight = sheetObject.defaultRowHeight;
       double? defaultColumnWidth = sheetObject.defaultColumnWidth;
 
@@ -957,11 +957,384 @@ class Save {
       }
 
       _setColumns(sheetObject, xmlFile);
-
       _setRows(sheetName, sheetObject);
-
       _setHeaderFooter(sheetName);
+      _setDrawingsAndCharts(sheetName, sheetObject, xmlFile); // Updated
     });
+  }
+
+  /// Serializes the drawings and charts associated with a sheet.
+  void _setDrawingsAndCharts(
+    String sheetName,
+    Sheet sheetObject,
+    XmlDocument xmlFile,
+  ) {
+    if (sheetObject._drawing == null) return;
+    print('Setting drawings and charts for $sheetName');
+
+    // Create or get the drawing XML element
+    XmlElement worksheetElement = xmlFile.findAllElements('worksheet').first;
+    XmlElement? drawingElement =
+        worksheetElement.findElements('drawing').firstOrNull;
+
+    if (drawingElement == null) {
+      drawingElement = XmlElement(XmlName('drawing'), [
+        XmlAttribute(XmlName('r:id'), 'rId1') // Assuming rId1 for simplicity
+      ]);
+      worksheetElement.children.add(drawingElement);
+    }
+
+    // Create drawing file for this sheet
+    final drawingNumber = ++_drawingsCount;
+    String drawingFileName = 'xl/drawings/drawing${drawingNumber}.xml';
+    XmlDocument drawingXml = _createDrawingXml(sheetObject._drawing!);
+    _excel._archive.addFile(ArchiveFile(
+        drawingFileName,
+        utf8.encode(drawingXml.toString()).length,
+        utf8.encode(drawingXml.toString())));
+    _excel._xmlFiles[drawingFileName] = drawingXml;
+
+    // Add the drawing relationship to the sheet's relationship file
+    _addSheetRelationship(_excel._xmlSheetId[sheetName]!.split("/").last,
+        'drawing', _getFilePathWithoutXl(drawingFileName));
+
+    _excel._xmlFiles['[Content_Types].xml']
+        ?.findAllElements('Types')
+        .first
+        .children
+        .add(XmlElement(
+          XmlName('Override'),
+          <XmlAttribute>[
+            XmlAttribute(XmlName('ContentType'),
+                'application/vnd.openxmlformats-officedocument.drawing+xml'),
+            XmlAttribute(XmlName('PartName'), '/$drawingFileName'),
+          ],
+        ));
+
+    // Add chart relationships
+    for (var element in sheetObject._drawing!.allElements) {
+      if (element is ChartElement) {
+        String chartFileName =
+            'xl/charts/chart${++_chartsCount}.xml'; // Assuming unique chart file names
+        XmlDocument chartXml = _createChartXml(element.chart);
+        _excel._archive.addFile(ArchiveFile(
+            chartFileName,
+            utf8.encode(chartXml.toString()).length,
+            utf8.encode(chartXml.toString())));
+        _excel._xmlFiles[chartFileName] = chartXml;
+
+        _excel._xmlFiles['[Content_Types].xml']
+            ?.findAllElements('Types')
+            .first
+            .children
+            .add(XmlElement(
+              XmlName('Override'),
+              <XmlAttribute>[
+                XmlAttribute(XmlName('ContentType'),
+                    'application/vnd.openxmlformats-officedocument.drawingml.chart+xml'),
+                XmlAttribute(XmlName('PartName'), '/$chartFileName'),
+              ],
+            ));
+
+        // Add the chart relationship to the drawing's relationship file
+        _addDrawingRelationship(
+          drawingNumber,
+          _getFilePathWithoutXl(chartFileName),
+        );
+      }
+    }
+  }
+
+  /// Adds a relationship entry to the drawing's relationship file.
+  void _addDrawingRelationship(int drawingNumber, String target) {
+    String relFileName = 'xl/drawings/_rels/drawing${drawingNumber}.xml.rels';
+    XmlDocument? relsFile = _excel._xmlFiles[relFileName];
+
+    if (relsFile == null) {
+      relsFile = XmlDocument([
+        XmlElement(XmlName('Relationships'), [
+          XmlAttribute(XmlName('xmlns'),
+              'http://schemas.openxmlformats.org/package/2006/relationships')
+        ], [])
+      ]);
+    }
+
+    XmlElement relationships = relsFile.rootElement;
+
+    relationships.children.add(XmlElement(
+      XmlName('Relationship'),
+      [
+        XmlAttribute(XmlName('Id'), 'rId1'),
+        XmlAttribute(XmlName('Type'),
+            'http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart'),
+        XmlAttribute(XmlName('Target'), '../$target'),
+      ],
+    ));
+
+    // Update archive files with the new relationship
+    _excel._archive.addFile(ArchiveFile(
+        relFileName,
+        utf8.encode(relsFile.toString()).length,
+        utf8.encode(relsFile.toString())));
+    _excel._xmlFiles[relFileName] = relsFile;
+  }
+
+  /// Creates the XML for a drawing containing charts.
+  XmlDocument _createDrawingXml(Drawing drawing) {
+    XmlBuilder builder = XmlBuilder();
+    builder.element('xdr:wsDr', nest: () {
+      builder.attribute('xmlns:xdr',
+          'http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing');
+      builder.attribute(
+          'xmlns:a', 'http://schemas.openxmlformats.org/drawingml/2006/main');
+      builder.attribute('xmlns:r',
+          'http://schemas.openxmlformats.org/officeDocument/2006/relationships');
+      builder.attribute(
+          'xmlns:c', 'http://schemas.openxmlformats.org/drawingml/2006/chart');
+
+      for (var element in drawing.allElements) {
+        if (element is ChartElement) {
+          _buildChartXml(builder, element);
+        }
+        // Other drawing elements can be added here if needed
+      }
+    });
+
+    return builder.buildDocument();
+  }
+
+  /// Builds the XML for a chart element within a drawing.
+  void _buildChartXml(XmlBuilder builder, ChartElement chartElement) {
+    builder.element('xdr:oneCellAnchor', nest: () {
+      builder.element('xdr:from', nest: () {
+        builder.element('xdr:col', nest: chartElement.x);
+        builder.element('xdr:colOff', nest: '485775');
+        builder.element('xdr:row', nest: chartElement.y);
+        builder.element('xdr:rowOff', nest: '171450');
+      });
+      builder.element('xdr:ext', attributes: {
+        'cx': '10334625',
+        'cy': '6400800',
+      });
+      builder.element('xdr:graphicFrame', nest: () {
+        builder.attribute('macro', '');
+
+        builder.element('xdr:nvGraphicFramePr', nest: () {
+          builder.element('xdr:cNvPr', attributes: {
+            'id': '2', // Assuming id 2
+            'name': chartElement.name,
+          });
+          builder.element('xdr:cNvGraphicFramePr');
+        });
+
+        builder.element('xdr:xfrm', nest: () {
+          builder.element('a:off', attributes: {'x': '0', 'y': '0'});
+          builder.element('a:ext', attributes: {'cx': '0', 'cy': '0'});
+        });
+
+        builder.element('a:graphic', nest: () {
+          builder.element('a:graphicData', attributes: {
+            'uri': 'http://schemas.openxmlformats.org/drawingml/2006/chart'
+          }, nest: () {
+            builder.element('c:chart', attributes: {
+              'r:id': 'rId1' // Assuming rId1 for the chart relationship
+            });
+          });
+        });
+      });
+
+      builder.element('xdr:clientData');
+    });
+  }
+
+  XmlDocument _createChartXml(Chart chart) {
+    final builder = XmlBuilder();
+
+    // Root element 'c:chartSpace' with namespaces
+    builder.element('c:chartSpace', nest: () {
+      builder.attribute(
+          'xmlns:c', 'http://schemas.openxmlformats.org/drawingml/2006/chart');
+      builder.attribute(
+          'xmlns:a', 'http://schemas.openxmlformats.org/drawingml/2006/main');
+      builder.attribute('xmlns:r',
+          'http://schemas.openxmlformats.org/officeDocument/2006/relationships');
+
+      // Chart element
+      builder.element('c:chart', nest: () {
+        // Chart Title
+        builder.element('c:title', nest: () {
+          builder.element('c:tx', nest: () {
+            builder.element('c:rich', nest: () {
+              builder.element('a:bodyPr');
+              builder.element('a:lstStyle');
+              builder.element('a:p', nest: () {
+                builder.element('a:r', nest: () {
+                  builder.element('a:rPr', nest: () {
+                    builder.element('a:solidFill', nest: () {
+                      builder.element('a:srgbClr', attributes: {
+                        'val': '757575',
+                      });
+                    });
+                    builder.element('a:latin', nest: () {
+                      builder.attribute('typeface', '+mn-lt');
+                    });
+                  });
+                  builder.element('a:t', nest: chart.title);
+                });
+              });
+            });
+          });
+          builder.element('c:overlay', nest: () {
+            builder.attribute('val', '0');
+          });
+        });
+
+        // Plot Area
+        builder.element('c:plotArea', nest: () {
+          switch (chart.chartType) {
+            case ChartType.columnChart:
+              _buildColumnChart(builder, chart);
+              break;
+            case ChartType.lineChart:
+              _buildLineChart(builder, chart);
+              break;
+            case ChartType.barChart:
+              _buildBarChart(builder, chart);
+              break;
+            case ChartType.pieChart:
+              _buildPieChart(builder, chart);
+              break;
+            case ChartType.scatterChart:
+              _buildScatterChart(builder, chart);
+              break;
+            case ChartType.areaChart:
+              _buildAreaChart(builder, chart);
+              break;
+            case ChartType.doughnutChart:
+              _buildDoughnutChart(builder, chart);
+              break;
+          }
+        });
+
+        if (chart.chartType == ChartType.pieChart ||
+            chart.chartType == ChartType.doughnutChart) {
+          _buildLegend(builder);
+        }
+      });
+    });
+
+    // Build the final XML document
+    return builder.buildDocument();
+  }
+
+  void _buildLegend(XmlBuilder builder) {
+    builder.element('c:legend', nest: () {
+      builder.element('c:legendPos', nest: () {
+        builder.attribute('val', 'r');
+      });
+      builder.element('c:layout');
+      builder.element('c:overlay', nest: () {
+        builder.attribute('val', '0');
+      });
+      builder.element('c:txPr', nest: () {
+        builder.element('a:bodyPr');
+        builder.element('a:lstStyle');
+        builder.element('a:p', nest: () {
+          builder.element('a:pPr', attributes: {'lvl': '0'}, nest: () {
+            builder.element('a:defRPr', attributes: {'b': '0'}, nest: () {
+              builder.element('a:solidFill', nest: () {
+                builder.element('a:srgbClr', attributes: {
+                  'val': '757575',
+                });
+              });
+              builder.element('a:latin', nest: () {
+                builder.attribute('typeface', '+mn-lt');
+              });
+            });
+          });
+        });
+      });
+    });
+  }
+
+// Helper method to build chart series XML dynamically
+  void _buildBarChart(XmlBuilder builder, Chart chart) {
+    _addXmlStringToBuilder(
+      builder,
+      _getBarChartXmlString(chart, horizontal: true),
+    );
+  }
+
+  void _buildAreaChart(XmlBuilder builder, Chart chart) {
+    _addXmlStringToBuilder(
+      builder,
+      _getLineChartXmlString(chart, filled: true),
+    );
+  }
+
+// Builds Column Chart XML
+  void _buildColumnChart(XmlBuilder builder, Chart chart) {
+    _addXmlStringToBuilder(
+      builder,
+      _getBarChartXmlString(chart, horizontal: false),
+    );
+  }
+
+// Builds Line Chart XML
+  void _buildLineChart(XmlBuilder builder, Chart chart) {
+    _addXmlStringToBuilder(builder, _getLineChartXmlString(chart));
+  }
+
+// Builds Pie Chart XML
+  void _buildPieChart(XmlBuilder builder, Chart chart) {
+    _addXmlStringToBuilder(builder, _getPieChartXmlString(chart));
+  }
+
+// Builds Scatter Chart XML
+  void _buildScatterChart(XmlBuilder builder, Chart chart) {
+    _addXmlStringToBuilder(builder, _getScatterChartXmlString(chart));
+  }
+
+// Builds Doughnut Chart XML
+  void _buildDoughnutChart(XmlBuilder builder, Chart chart) {
+    _addXmlStringToBuilder(
+      builder,
+      _getPieChartXmlString(chart, filled: false),
+    );
+  }
+
+  /// Adds a relationship entry to the sheet's relationship file.
+  void _addSheetRelationship(String sheetName, String type, String target) {
+    String relFileName = 'xl/worksheets/_rels/${sheetName}.rels';
+    XmlDocument? relsFile = _excel._xmlFiles[relFileName];
+
+    if (relsFile == null) {
+      relsFile = XmlDocument([
+        XmlElement(XmlName('Relationships'), [
+          XmlAttribute(XmlName('xmlns'),
+              'http://schemas.openxmlformats.org/package/2006/relationships')
+        ], [])
+      ]);
+    }
+
+    XmlElement relationships = relsFile.rootElement;
+
+    relationships.children.add(XmlElement(
+      XmlName('Relationship'),
+      [
+        XmlAttribute(XmlName('Id'), 'rId${relationships.children.length + 1}'),
+        XmlAttribute(XmlName('Type'),
+            'http://schemas.openxmlformats.org/officeDocument/2006/relationships/$type'),
+        XmlAttribute(XmlName('Target'), '../$target'),
+      ],
+    ));
+
+    // Update archive files with the new relationship
+    _excel._archive.addFile(ArchiveFile(
+        relFileName,
+        utf8.encode(relsFile.toString()).length,
+        utf8.encode(relsFile.toString())));
+    _excel._xmlFiles[relFileName] = relsFile;
   }
 
   // slow implementation
