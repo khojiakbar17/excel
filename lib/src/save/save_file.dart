@@ -563,9 +563,6 @@ class Save {
       var xml = _excel._xmlFiles[xmlFile].toString();
       var content = utf8.encode(xml);
 
-      print('Saving $xmlFile');
-      print(content);
-      print('');
       _archiveFiles[xmlFile] = ArchiveFile(xmlFile, content.length, content);
     }
     return ZipEncoder().encode(_cloneArchive(_excel._archive, _archiveFiles));
@@ -970,7 +967,6 @@ class Save {
     XmlDocument xmlFile,
   ) {
     if (sheetObject._drawing == null) return;
-    print('Setting drawings and charts for $sheetName');
 
     // Create or get the drawing XML element
     XmlElement worksheetElement = xmlFile.findAllElements('worksheet').first;
